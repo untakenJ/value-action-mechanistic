@@ -4,7 +4,29 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "accelerate>=1.14.0",
+    "jlens",
+    "json-repair>=0.30.0",
+    "pandas>=2.2.0",
+    "python-dotenv>=1.0.0",
+    "sae-lens>=6.45.3",
+    "scikit-learn>=1.5.0",
+    "torch>=2.0.0",
+    "tqdm>=4.66.0",
+    "transformer-lens>=3.0.0b0",
+    "transformers>=5.13.0",
+]
+
+[project.optional-dependencies]
+# Not installed by default: `uv sync --extra vllm` to opt in. Kept optional
+# because vLLM pins its own torch/CUDA stack, which can conflict with the
+# torch version this project otherwise resolves to (jlens/transformer-lens).
+# Prefer a dedicated venv/container if you need both stacks isolated.
+vllm = ["vllm"]
 
 [tool.uv]
 python-preference = "only-managed"
+
+[tool.uv.sources]
+jlens = { git = "https://github.com/anthropics/jacobian-lens.git" }
