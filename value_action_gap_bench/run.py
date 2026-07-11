@@ -9,6 +9,11 @@ import argparse
 import json
 from pathlib import Path
 
+from local_inference import (
+    add_local_inference_args,
+    config_from_args,
+    create_backend,
+)
 from value_action_gap_bench.constants import (
     COUNTRIES,
     DEFAULT_PROMPT_INDICES,
@@ -17,7 +22,6 @@ from value_action_gap_bench.constants import (
 )
 from value_action_gap_bench.data import filter_scenarios, load_via_dataset
 from value_action_gap_bench.metrics import compute_alignment_summary, print_alignment_summary
-from value_action_gap_bench.model import HFBackend, load_model_and_tokenizer
 from value_action_gap_bench.runner import RunConfig, model_slug, run_task1, run_task2
 
 
@@ -40,11 +44,6 @@ def build_parser() -> argparse.ArgumentParser:
             "'Mind the Value-Action Gap' (arXiv:2501.15463) with local HuggingFace models."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    parser.add_argument(
-        "--model",
-        default="google/gemma-3-4b-it",
-        help="HuggingFace model id (default: gemma-3-4b-it).",
     )
     parser.add_argument(
         "--output-dir",
@@ -74,60 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=",".join(str(i) for i in DEFAULT_PROMPT_INDICES),
         help="Prompt variants to run (0-7 for both tasks).",
     )
-    parser.add_argument(
-        "--backend",
-        choices=["hf", "vllm"],
-        default="hf",
-        help=(
-            "Inference engine. 'hf' runs transformers model.generate() sequentially "
-            "(one prompt at a time). 'vllm' submits whole batches to vLLM's "
-            "continuous-batching scheduler for much higher throughput; requires the "
-            "optional 'vllm' extra (uv sync --extra vllm) to be installed."
-        ),
-    )
-    parser.add_argument(
-        "--device", default=None, help="cuda or cpu (auto-detected if omitted; hf backend only)."
-    )
-    parser.add_argument(
-        "--dtype",
-        choices=["float32", "bfloat16"],
-        default="bfloat16",
-        help="Model dtype.",
-    )
-    parser.add_argument(
-        "--attn-implementation",
-        default="sdpa",
-        help="Attention kernel for the hf backend, e.g. sdpa/eager/flash_attention_2.",
-    )
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--max-new-tokens", type=int, default=8192)
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=None,
-        help=(
-            "Prompts submitted to the backend per call, and how often progress is "
-            "checkpointed to CSV. Defaults to 1 for 'hf' (identical cadence to the "
-            "original sequential pipeline) and 64 for 'vllm' (lets the scheduler "
-            "batch many concurrent requests)."
-        ),
-    )
-    parser.add_argument(
-        "--gpu-memory-utilization",
-        type=float,
-        default=0.85,
-        help="Fraction of GPU memory vLLM may reserve for weights + KV cache (vllm backend only).",
-    )
-    parser.add_argument(
-        "--max-model-len",
-        type=int,
-        default=None,
-        help="Optional context-length cap for vLLM (vllm backend only).",
-    )
-    parser.add_argument(
-        "--raw-prompt",
-        action="store_true",
-        help="Skip chat template (use raw prompts).",
+    add_local_inference_args(
+        parser,
+        default_model="google/gemma-3-4b-it",
+        default_backend="hf",
     )
     parser.add_argument(
         "--resume",
@@ -160,7 +111,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     prompt_indices = _parse_int_list(args.prompt_indices) or DEFAULT_PROMPT_INDICES
     task_steps = {step.strip() for step in args.tasks.split(",") if step.strip()}
-    batch_size = args.batch_size if args.batch_size is not None else (64 if args.backend == "vllm" else 1)
+    inference = config_from_args(args)
+    batch_size = inference.resolved_batch_size
 
     config = RunConfig(
         model_name=args.model,
@@ -174,7 +126,7 @@ def main(argv: list[str] | None = None) -> None:
         prompt_indices=prompt_indices,
         temperature=args.temperature,
         max_new_tokens=args.max_new_tokens,
-        use_chat_template=not args.raw_prompt,
+        use_chat_template=inference.use_chat_template,
         resume=args.resume,
         batch_size=batch_size,
     )
@@ -185,28 +137,12 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Topics ({len(topics)}): {topics}")
     print(f"Prompt indices: {prompt_indices}")
     print(f"Output dir: {args.output_dir}")
-    print(f"Backend: {args.backend} (dtype={args.dtype}, batch_size={batch_size})")
+    print(f"Backend: {inference.backend} (dtype={inference.dtype}, batch_size={batch_size})")
 
     via_df = load_via_dataset(args.via_csv)
     backend = None
     if "1" in task_steps or "2" in task_steps:
-        if args.backend == "vllm":
-            from value_action_gap_bench.vllm_backend import VLLMBackend
-
-            backend = VLLMBackend(
-                args.model,
-                dtype=args.dtype,
-                gpu_memory_utilization=args.gpu_memory_utilization,
-                max_model_len=args.max_model_len,
-            )
-        else:
-            model, tokenizer = load_model_and_tokenizer(
-                args.model,
-                device=args.device,
-                dtype=args.dtype,
-                attn_implementation=args.attn_implementation,
-            )
-            backend = HFBackend(model, tokenizer)
+        backend = create_backend(inference)
 
     t1_path = args.output_dir / f"{model_slug(args.model)}_t1.csv"
     t2_path = args.output_dir / f"{model_slug(args.model)}_t2.csv"
