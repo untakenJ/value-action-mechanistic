@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "name": "default",
+  "description": "Original Psycho-LLM factor adjectives with first word-boundary token steering.",
+  "factors": {
+    "RE": {
+      "prompt_adjective": "responsive",
+      "concepts": [
+        {"text": "responsive"}
+      ]
+    },
+    "DE": {
+      "prompt_adjective": "deferential",
+      "concepts": [
+        {"text": "deferential"}
+      ]
+    },
+    "BO": {
+      "prompt_adjective": "bold",
+      "concepts": [
+        {"text": "bold"}
+      ]
+    },
+    "GU": {
+      "prompt_adjective": "guarded",
+      "concepts": [
+        {"text": "guarded"}
+      ]
+    },
+    "VB": {
+      "prompt_adjective": "verbose",
+      "concepts": [
+        {"text": "verbose"}
+      ]
+    }
+  }
+}

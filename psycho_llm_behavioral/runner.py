@@ -6,14 +6,14 @@ import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
 from tqdm import tqdm
 
 from local_inference.backend import InferenceBackend, chunked
 from psycho_llm_behavioral.judge_client import JudgeClient
-from psycho_llm_behavioral.prompts import build_messages
+from psycho_llm_behavioral.steering import SteeringConfig, build_steered_messages
 from psycho_llm_behavioral.storage import JsonlStore
 
 
@@ -28,14 +28,19 @@ class GenerationConfig:
     batch_size: int = 64
     use_chat_template: bool = True
     seed: int | None = None
+    steering: SteeringConfig = field(default_factory=SteeringConfig)
 
     def public_dict(self) -> dict:
-        return asdict(self)
+        payload = asdict(self)
+        payload["steering"] = self.steering.public_dict()
+        return payload
 
     @property
     def fingerprint(self) -> str:
         identity = self.public_dict()
         identity.pop("n_runs")  # Collection extent; increasing it should only add samples.
+        if self.steering.method == "none":
+            identity.pop("steering")  # Preserve pre-steering baseline IDs.
         payload = json.dumps(identity, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
@@ -84,8 +89,12 @@ def run_generation(
     progress = tqdm(total=len(tasks), desc="Behavioral generation", disable=not show_progress)
     try:
         for batch in chunked(tasks, config.batch_size):
-            inputs = [build_messages(prompt) for _, prompt, _ in batch]
+            inputs = [
+                build_steered_messages(prompt, config.steering)
+                for _, prompt, _ in batch
+            ]
             timestamp = datetime.now(timezone.utc).isoformat()
+            generation_metadata = [config.steering.public_dict() for _ in batch]
             try:
                 outputs = backend.generate_batch(
                     inputs,
@@ -97,14 +106,21 @@ def run_generation(
                     raise RuntimeError(
                         f"Backend returned {len(outputs)} outputs for {len(batch)} prompts"
                     )
+                backend_metadata = getattr(backend, "last_generation_metadata", None)
+                if backend_metadata is not None:
+                    if len(backend_metadata) != len(batch):
+                        raise RuntimeError(
+                            "Backend generation metadata does not align with its outputs"
+                        )
+                    generation_metadata = backend_metadata
                 errors = [None] * len(batch)
             except Exception as exc:
                 outputs = [None] * len(batch)
                 errors = [f"{type(exc).__name__}: {exc}"] * len(batch)
 
             records = []
-            for (record_id, prompt, run_number), output, error in zip(
-                batch, outputs, errors
+            for (record_id, prompt, run_number), messages, metadata, output, error in zip(
+                batch, inputs, generation_metadata, outputs, errors
             ):
                 if error is None and (output is None or not output.strip()):
                     error = "empty_model_response"
@@ -118,7 +134,8 @@ def run_generation(
                         "dimension_code": prompt["dimension_code"],
                         "is_two_turn": bool(prompt["is_two_turn"]),
                         "run_number": run_number,
-                        "messages": build_messages(prompt),
+                        "messages": messages,
+                        "steering": metadata,
                         "raw_response": output,
                         "response_sha256": response_sha256(output),
                         "status": "success" if error is None else "generation_error",

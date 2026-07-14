@@ -111,6 +111,11 @@ def export_results(run_dir: Path, responses: list[dict], ratings: list[dict]) ->
         "target_dimension_code",
         "is_two_turn",
         "run_number",
+        "steering_method",
+        "steering_factors",
+        "steering_layer",
+        "steering_alpha",
+        "steering_json",
         "generation_status",
         "generation_error",
         "messages_json",
@@ -132,6 +137,7 @@ def export_results(run_dir: Path, responses: list[dict], ratings: list[dict]) ->
         key=lambda row: (row["prompt_id"], row["run_number"], row["response_id"]),
     ):
         response_ratings = ratings_by_response.get(response["response_id"]) or [None]
+        steering = response.get("steering") or {"method": "none", "factors": []}
         for rating in response_ratings:
             row = {
                 "response_id": response["response_id"],
@@ -141,6 +147,13 @@ def export_results(run_dir: Path, responses: list[dict], ratings: list[dict]) ->
                 "target_dimension_code": response["dimension_code"],
                 "is_two_turn": response["is_two_turn"],
                 "run_number": response["run_number"],
+                "steering_method": steering.get("method", "none"),
+                "steering_factors": ",".join(steering.get("factor_names", [])),
+                "steering_layer": steering.get("layer"),
+                "steering_alpha": steering.get("alpha"),
+                "steering_json": json.dumps(
+                    steering, ensure_ascii=False, sort_keys=True
+                ),
                 "generation_status": response["status"],
                 "generation_error": response.get("error_message"),
                 "messages_json": json.dumps(response["messages"], ensure_ascii=False),

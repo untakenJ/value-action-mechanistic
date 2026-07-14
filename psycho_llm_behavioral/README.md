@@ -93,6 +93,36 @@ uv run python -m psycho_llm_behavioral --model org/model-name
 
 更换 Judge 时可设置 JUDGE_BASE_URL、JUDGE_MODEL 和 JUDGE_API_KEY。若服务不接受 DeepSeek 的 thinking 扩展字段，设置 JUDGE_THINKING=omit。
 
+两种 steering、单/多因子、J-lens 层与 alpha 配置见 [STEERING.md](STEERING.md)。
+
+### 检查生成前最后一个 token 的 J-space
+
+独立脚本会先用与行为实验相同的多轮 messages 和 chat template 渲染输入，然后固定检查
+位置 `-1`，也就是模型生成第一个输出 token 之前的最后一个输入 token：
+
+~~~bash
+uv run python -m psycho_llm_behavioral.inspect_jspace \
+  --prompt-ids BO-BP01,DE-BP03 \
+  --layers all \
+  --jspace-layers 65% \
+  --top-k 10 \
+  --jspace-k 25
+~~~
+
+输出同时保留两类不能混为一谈的结果：
+
+- `top_lens_tokens`：论文的标准 Jacobian-lens readout，即对
+  `W_U norm(J_l h_l)` 的 pre-softmax logits 排序。
+- `jspace_decomposition`：用 token 对应的 `W_U J_l` 行向量做稀疏非负
+  gradient pursuit，给出坐标系数以及 J-space/剩余部分的平方范数占比。
+
+默认对所有已拟合层做标准 readout，但只在最接近模型 65% 深度的已拟合层做计算更昂贵的
+稀疏分解；`--jspace-layers` 也可指定逗号分隔的实际层号，`--no-sparse-decomposition`
+可只跑标准 readout。脚本不会静默截断超长输入，因为截断会改变“生成前最后一个 token”的
+含义。默认 JSONL 写入
+`outputs/psycho_llm_behavioral/jspace_last_token.jsonl`，每条记录包含完整渲染输入、被检查
+token 的 id/文本/邻近上下文、各层结果，以及模型和 lens 元数据。
+
 ## 输出
 
 默认输出目录为：
@@ -104,9 +134,9 @@ outputs/psycho_llm_behavioral/google__gemma-3-4b-it/
 | 文件 | 内容 |
 |---|---|
 | manifest.json | 论文来源、模型、后端、采样参数和 Judge 配置，不含密钥 |
-| model_responses.jsonl | 完整输入消息、模型原始输出、状态、时间和输出哈希 |
+| model_responses.jsonl | 完整输入消息、steering/注入元数据、模型原始输出、状态、时间和输出哈希 |
 | judge_ratings.jsonl | Judge 原始 JSON、正反向 keying、原始分和反向校正后的五因子分 |
-| results.csv | 模型输出与 Judge 分数的平面连接表 |
+| results.csv | 模型输出、steering 条件与 Judge 分数的平面连接表 |
 | summary.json | 总体、逐题和逐目标因子的均值与样本数 |
 
 写入采用原子 upsert。默认开启 resume，只跳过成功且仍绑定当前模型输出哈希的记录；失败调用和过期评分会在重跑时更新。
@@ -133,6 +163,7 @@ uv run python -m unittest discover -v
 
 - Paper: https://arxiv.org/abs/2606.09843
 - Author repository: https://github.com/jm-contreras/psycho-llm
+- J-lens paper: https://transformer-circuits.pub/2026/workspace/index.html#methods-jlens
 - 行为提示材料：CC-BY 4.0
 - 作者 pipeline 代码：MIT
 
